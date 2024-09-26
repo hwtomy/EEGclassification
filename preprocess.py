@@ -57,7 +57,7 @@ def remove_short_segments(df, min_duration):
  
     df['duration'] = df['end_time'] - df['start_time']
     
-    filtered_df = df[df['duration'] >= min_duration]
+    filtered_df = df[df['duration'] == min_duration]
     
     return filtered_df
 

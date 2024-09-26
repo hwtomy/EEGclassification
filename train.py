@@ -15,6 +15,7 @@ from clean import clear_directory
 from shallow import Shallow, ContrastiveNet
 from loss import RelativePositioningLoss
 from pretext import RPDataset, collate_fn, split_dataset, LabelDataset
+from preprocess import remove_short_segments
 
 
 
@@ -114,7 +115,23 @@ from pretext import RPDataset, collate_fn, split_dataset, LabelDataset
 #     print(f"Test Loss: {avg_test_loss}, Accuracy: {accuracy}")
     
 #     return avg_test_loss, accuracy
+class RelativePositioningLoss(torch.nn.Module):
+    def __init__(self, emb_size, w0=0.0):
+        super(RelativePositioningLoss, self).__init__()
+        self.w = torch.nn.Parameter(torch.randn(emb_size))  
+        self.w0 = w0  
 
+    def forward(self, x1, x2, y):
+    
+        h_x1 = model(x1)  
+        h_x2 = model(x2)  
+
+        g_RP = torch.abs(h_x1 - h_x2)
+
+        score = torch.dot(self.w, g_RP.T) + self.w0
+        loss = torch.log(1 + torch.exp(-y * score))
+
+        return loss.mean()
 
 def train_model(train_loader, test_loader, model, optimizer, criterion, epochs, threshold): 
     model.train()
@@ -124,20 +141,62 @@ def train_model(train_loader, test_loader, model, optimizer, criterion, epochs, 
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")
         
         for batch_idx, batch_data in enumerate(progress_bar):
+            print(f"Batch data: {batch_data}")
             anchor_data, paired_data, labels = zip(*batch_data)
+            # print(f"Anchor data list type: {type(anchor_data)}")
+            # print(f"First element type: {type(anchor_data[0])}")
+            # exit()
+            #anchor_data, paired_data, labels = batch_data
+            print(f"Batch {batch_idx} - anchor_data shape: {anchor_data[0].shape}, paired_data shape: {paired_data[0].shape}")
+            print(len(anchor_data))
 
-            anchor_data = torch.stack([torch.tensor(x) if not isinstance(x, torch.Tensor) else x for x in anchor_data]).float().to(device)
-            paired_data = torch.stack([torch.tensor(x) if not isinstance(x, torch.Tensor) else x for x in paired_data]).float().to(device)
-            labels = torch.tensor(labels).float().to(device)
+            # anchor_data = torch.stack([torch.tensor(x) if not isinstance(x, torch.Tensor) else x for x in anchor_data]).float().to(device)
+            # paired_data = torch.stack([torch.tensor(x) if not isinstance(x, torch.Tensor) else x for x in paired_data]).float().to(device)
+            # labels = torch.tensor(labels).float().to(device)
+            # # for i in range(len(anchor_data)):
+            # #     anchor_tensor = torch.tensor(anchor_data[i]).float().to(device)  
+            # #     paired_tensor = torch.tensor(paired_data[i]).float().to(device)  
+            # #     label_tensor = torch.tensor(labels[i]).float().to(device)
+    
             
-            optimizer.zero_grad()
+            # optimizer.zero_grad()
 
-            loss = criterion(anchor_data, paired_data, labels)
+
+            # # output = model(anchor_data, paired_data)
             
-            loss.backward()
-            optimizer.step()
+            # # loss = criterion(output, labels)
 
-            running_loss += loss.item()
+            # output = model(anchor_data, paired_data)  
+            # loss = criterion(output, label) 
+            # loss.backward()
+            # optimizer.step()
+
+
+
+            for i in range(len(batch_data)): 
+                anchor_datass = anchor_data[i]
+                
+  
+                paired_datass = paired_data[i]
+                labelss = labels[i]
+
+
+                anchor_datass = anchor_datass.unsqueeze(0).float().to(device)
+                paired_datass = paired_datass.unsqueeze(0).float().to(device)
+                #labelss = torch.tensor([labelss]).unsqueeze(0).float().to(device)
+
+                optimizer.zero_grad()
+                output = model(anchor_datass, paired_datass)
+
+                print(output)
+                #print(labelss)
+                labelss = torch.tensor([labelss]).float().to(device).view_as(output)
+                loss = criterion(output, labelss)
+                loss.backward()
+                optimizer.step()
+            
+                running_loss += loss.item()
+    
 
         print(f"Epoch {epoch + 1}/{epochs}, Loss: {running_loss / len(train_loader)}")
 
@@ -201,6 +260,7 @@ clip_stride = 6
 #all_clips_df = clips(df, sampling_rate, target_sampling_rate, output_dir, lowpass_freq,clip_length, clip_stride)
 #all_clips_df.to_parquet('./data/processed.parquet', engine='pyarrow')
 all_clips_df = pd.read_parquet('./data/processed.parquet')
+all_clips_df = remove_short_segments(all_clips_df, 6)
 df = all_clips_df
 label_1_count = df[df['label'] == 1].shape[0]
 label_0_count = df[df['label'] == 0].shape[0]
@@ -215,13 +275,15 @@ emb = Shallow(1, 40)
 model = ContrastiveNet(emb, emb_size).to(device)
 optimizer = Adam(model.parameters(), lr=0.001, betas=(0.9, 0.999))
 criterion = RelativePositioningLoss(emb_size).to(device)
-
+#print(df.head())
 train_df, test_df = split_dataset(all_clips_df)
-train_dataset = RPDataset(train_df, tau_pos=18, tau_neg=600)
-print(train_dataset[0])
+session_count = train_df['session'].nunique()
+print(f"Number of unique sessions: {session_count}")
+train_dataset = RPDataset(train_df, tau_pos=18, tau_neg=90)
+#print(train_dataset[0])
 test_dataset = LabelDataset(test_df)
-train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, collate_fn=collate_fn, num_workers=4)
-test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False, collate_fn=collate_fn, num_workers=4)
+train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True,collate_fn=collate_fn, num_workers=0)
+test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False,collate_fn=collate_fn, num_workers=0)
 
 train_model(train_loader, test_loader, model, optimizer, criterion, epochs=100, threshold=0.01)
 # folder_to_clear = './data/train'

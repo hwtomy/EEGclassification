@@ -1,13 +1,13 @@
 from torch.utils.data import DataLoader, Dataset
 import pandas as pd
 import random
-
-
+from sklearn.model_selection import train_test_split
+import torch
 import random
 import pandas as pd
 
 class RPDataset(Dataset):
-    def __init__(self, clips_df, tau_pos, tau_neg, sampling_rate=100, num_pairs=400):
+    def __init__(self, clips_df, tau_pos, tau_neg, sampling_rate=100, num_pairs=200):
         self.clips_df = clips_df
         self.tau_pos = tau_pos
         self.tau_neg = tau_neg
@@ -25,21 +25,22 @@ class RPDataset(Dataset):
         session_id, session_df = self.sessions[index]
         
 
-        pos_pairs = self.generate_pairs(session_df, pair_type="positive", num_pairs=400)
-        neg_pairs = self.generate_pairs(session_df, pair_type="negative", num_pairs=400)
+        pos_pairs = self.generate_pairs(session_df, pair_type="positive", num_pairs=200)
+        neg_pairs = self.generate_pairs(session_df, pair_type="negative", num_pairs=200)
 
-        if len(pos_pairs) == 0 or len(neg_pairs) == 0:
+        if len(pos_pairs) == 0 and len(neg_pairs) == 0:
+            #print(f"Skipping session {session_id}, not enough pairs")
             return []
-
+        #print(f"Generated {len(pos_pairs)} positive pairs and {len(neg_pairs)} negative pairs")
         all_pairs = pos_pairs + neg_pairs
-        random.shuffle(all_pairs)
+        #random.shuffle(all_pairs)
 
         return all_pairs
 
     def generate_pairs(self, session_df, pair_type, num_pairs):
         pairs = []
         att = 0
-        maxa = 800
+        maxa = 400
         while len(pairs) < num_pairs and att < maxa:
             anchor_window = session_df.sample(1).iloc[0]
 
@@ -48,7 +49,7 @@ class RPDataset(Dataset):
                 label = 1 
             else:
                 paired_window = self.get_negative_window(anchor_window, session_df)
-                label = 0  
+                label = -1  
 
             if paired_window is None:
                 att += 1
@@ -84,11 +85,22 @@ class RPDataset(Dataset):
 
         return neg_samples.sample(1).iloc[0]
 
+    # def read_signal(self, window):
+    #     signal_df = pd.read_parquet(window['signals_path'])
+    #     start_sample = int(window['start_time'] * self.sampling_rate)
+    #     end_sample = int(window['end_time'] * self.sampling_rate)
+    #     return signal_df.values[start_sample:end_sample, :].T
     def read_signal(self, window):
-        signal_df = pd.read_parquet(window['signals_path'])
+        if not hasattr(self, 'signal_cache'):
+            self.signal_cache = {}
+        signal_path = window['signals_path']
+        if signal_path not in self.signal_cache:
+            self.signal_cache[signal_path] = pd.read_parquet(signal_path)
+        signal_df = self.signal_cache[signal_path]
         start_sample = int(window['start_time'] * self.sampling_rate)
         end_sample = int(window['end_time'] * self.sampling_rate)
-        return signal_df.values[:, start_sample:end_sample]
+        return signal_df.values[start_sample:end_sample, :].T
+
 
 
 
@@ -100,19 +112,31 @@ class RPDataset(Dataset):
     #     return signal_df.values[:, start_sample:end_sample].T 
 
 
-def collate_fn(batch):
-    anchor_pos, anchor_neg = [], []
-    for pos_pair, neg_pair in batch:
-        anchor_pos.append(pos_pair)
-        anchor_neg.append(neg_pair)
-    return anchor_pos, anchor_neg
+# def collate_fn(batch):
+#     anchor_pos, anchor_neg = [], []
+#     for pos_pair, neg_pair in batch:
+#         anchor_pos.append(pos_pair)
+#         anchor_neg.append(neg_pair)
+#     return anchor_pos, anchor_neg
 
 
 
-def split_dataset_by_session(clips_df, test_size=0.2, random_state=42):
+# def split_dataset(clips_df, test_size=0.2, random_state=42):
+#     session_ids = clips_df['session'].unique()
+
+#     train_sessions, test_sessions = train_test_split(session_ids, test_size=test_size, random_state=random_state)
+#     train_df = clips_df[clips_df['session'].isin(train_sessions)]
+#     test_df = clips_df[clips_df['session'].isin(test_sessions)]
+
+#     return train_df, test_df
+
+def split_dataset(clips_df, test_size=0.2, random_state=42):
+    clips_df = clips_df.reset_index(level=['session'])
+    
     session_ids = clips_df['session'].unique()
 
     train_sessions, test_sessions = train_test_split(session_ids, test_size=test_size, random_state=random_state)
+
     train_df = clips_df[clips_df['session'].isin(train_sessions)]
     test_df = clips_df[clips_df['session'].isin(test_sessions)]
 
@@ -139,3 +163,36 @@ class LabelDataset(Dataset):
         start_sample = int(window['start_time'] * self.sampling_rate)
         end_sample = int(window['end_time'] * self.sampling_rate)
         return signal_df.values[:, start_sample:end_sample]
+
+
+def pad_to_fixed_len(data, fixed_len):
+    if data.shape[1] < fixed_len:
+        pad_len = fixed_len - data.shape[1]
+
+        return torch.cat([data, torch.zeros(pad_len, data.shape[0])], dim=0)
+ 
+    return data[:,:fixed_len]  
+
+
+def collate_fn(batch):
+    fixed_len = 600 
+
+    anchor_data_list = []
+    paired_data_list = []
+    labels_list = []
+
+    for pairs in batch:
+        for anchor_data, paired_data, label in pairs:
+            anchor_data = torch.tensor(anchor_data)
+            paired_data = torch.tensor(paired_data)
+
+            
+            anchor_data_padded = pad_to_fixed_len(anchor_data, fixed_len)
+            paired_data_padded = pad_to_fixed_len(paired_data, fixed_len)
+
+            anchor_data_list.append(anchor_data_padded)
+            paired_data_list.append(paired_data_padded)
+            labels_list.append(label)
+
+
+        return list(zip(anchor_data_list, paired_data_list, labels_list))
