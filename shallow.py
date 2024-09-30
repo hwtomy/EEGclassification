@@ -20,8 +20,10 @@ class Shallow(nn.Module):
         x = self.spatial_conv(x)
         x = x ** 2
         x = self.mean_pool(x) 
-        x = x.view(-1) 
-        print(x.shape)
+        #print(x.shape)
+        #x.view(x.size(0), -1)
+        x = x.reshape(x.size(0), -1)
+        # print(x.shape)
         # Apply log transform
         x = torch.log(x + 1e-6)
         # Dropout layer

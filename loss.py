@@ -1,15 +1,15 @@
 import torch
 
-class RelativePositioningLoss(torch.nn.Module):
+class RelativePositioningLossm(torch.nn.Module):
     def __init__(self, emb_size, w0=0.0):
-        super(RelativePositioningLoss, self).__init__()
+        super(RelativePositioningLossm, self).__init__()
         self.w = torch.nn.Parameter(torch.randn(emb_size)) 
         self.w0 = w0 
 
-    def forward(self, output, y):
+    def forward(self, output, labelss):
 
-        y = y.view_as(output)  
+        labelss = labelss.view_as(output)  
         score = output + self.w0
-        loss = torch.log(1 + torch.exp(-y * score))
+        loss = torch.log(1 + torch.exp(-labelss * score))
         
         return loss.mean()

@@ -25,13 +25,15 @@ class RPDataset(Dataset):
         session_id, session_df = self.sessions[index]
         
 
-        pos_pairs = self.generate_pairs(session_df, pair_type="positive", num_pairs=200)
-        neg_pairs = self.generate_pairs(session_df, pair_type="negative", num_pairs=200)
+        pos_pairs = self.generate_pairs(session_df, pair_type="positive", num_pairs=300)
+        neg_pairs = self.generate_pairs(session_df, pair_type="negative", num_pairs=300)
 
         if len(pos_pairs) == 0 and len(neg_pairs) == 0:
             #print(f"Skipping session {session_id}, not enough pairs")
             return []
         #print(f"Generated {len(pos_pairs)} positive pairs and {len(neg_pairs)} negative pairs")
+        if (len(pos_pairs)+len(neg_pairs)) > 400:
+            pos_pairs = random.sample(pos_pairs, 400-len(neg_pairs))
         all_pairs = pos_pairs + neg_pairs
         #random.shuffle(all_pairs)
 
@@ -156,13 +158,24 @@ class LabelDataset(Dataset):
         window = self.clips_df.iloc[index]
         label = window['label'] 
         signal_data = self.read_signal(window)
-        return signal_data, label
+        # if signal_data is None or signal_data.size == 0:
+        #     return None, None
+
+        if signal_data is not None and signal_data.size > 0:
+            return signal_data, label 
+            
+        index = (index + 1) % len(self.clips_df)
+        
 
     def read_signal(self, window):
         signal_df = pd.read_parquet(window['signals_path'])
         start_sample = int(window['start_time'] * self.sampling_rate)
         end_sample = int(window['end_time'] * self.sampling_rate)
-        return signal_df.values[:, start_sample:end_sample]
+        signal_data = signal_df.values[:, start_sample:end_sample]
+        if signal_data.size == 0:
+            return None
+    
+        return signal_data
 
 
 def pad_to_fixed_len(data, fixed_len):
@@ -196,3 +209,126 @@ def collate_fn(batch):
 
 
         return list(zip(anchor_data_list, paired_data_list, labels_list))
+
+
+
+def collate_fnt(batch):
+    fixed_len = 600 
+
+    anchor_data_list = []
+    labels_list = []
+
+    for pairs in batch:
+        for anchor_data, label in pairs:
+            anchor_data = torch.tensor(anchor_data)
+            anchor_data_padded = pad_to_fixed_len(anchor_data, fixed_len)
+            anchor_data_list.append(anchor_data_padded)
+            labels_list.append(label)
+
+
+        return list(zip(anchor_data_list, labels_list))
+
+
+class taset(Dataset):
+    def __init__(self, clips_df, sampling_rate=100):
+        self.clips_df = clips_df
+        self.sampling_rate = sampling_rate
+
+    def __len__(self):
+        return len(self.clips_df)
+
+    def __getitem__(self, index):
+        pairs = []
+        window = self.clips_df.iloc[index]
+        label = window['label'] 
+
+        signal_data = self.read_signal(window)
+        
+        if len(signal_data) == 0:
+            return []
+        else:
+            pairs.append((signal_data, label))
+
+        return pairs
+
+
+
+    def read_signal(self, window):
+        if not hasattr(self, 'signal_cache'):
+            self.signal_cache = {}
+        signal_path = window['signals_path']
+        if signal_path not in self.signal_cache:
+            self.signal_cache[signal_path] = pd.read_parquet(signal_path)
+        signal_df = self.signal_cache[signal_path]
+        start_sample = int(window['start_time'] * self.sampling_rate)
+        end_sample = int(window['end_time'] * self.sampling_rate)
+        return signal_df.values[start_sample:end_sample, :].T
+
+
+
+
+class CPCDataset(Dataset):
+    def __init__(self, clips_df, N_c, N_p, N_b, sampling_rate=100):
+        """
+        :param N_c: Number of context windows.
+        :param N_p: Number of future windows to predict.
+        :param N_b: Number of negative windows to sample
+        """
+        self.clips_df = clips_df
+        self.N_c = N_c
+        self.N_p = N_p
+        self.N_b = N_b
+        self.sampling_rate = sampling_rate
+        self.sessions = list(self.clips_df.groupby('session'))  # Group by session
+
+    def __len__(self):
+        return len(self.sessions)  # Each session is treated as a sequence
+
+    def __getitem__(self, index):
+        session_id, session_df = self.sessions[index]
+        
+        # Sample context windows
+        context_windows = self.sample_windows(session_df, num_windows=self.N_c)
+
+        # Sample future windows (those that follow the context)
+        future_windows = self.sample_windows(session_df, num_windows=self.N_p, after=context_windows[-1])
+
+        # Sample negative windows (random windows not related to the context or future)
+        negative_windows = self.sample_negative_windows(session_df, num_windows=self.N_b, exclude=context_windows + future_windows)
+
+        # Get the corresponding signal data for each sampled window
+        context_data = [self.read_signal(window) for window in context_windows]
+        future_data = [self.read_signal(window) for window in future_windows]
+        negative_data = [self.read_signal(window) for window in negative_windows]
+
+        return torch.stack(context_data), torch.stack(future_data), torch.stack(negative_data)
+
+    def sample_windows(self, session_df, num_windows, after=None):
+        if after is not None:
+            pos_mask = session_df['start_time'] > after['end_time']
+            valid_windows = session_df[pos_mask]
+        else:
+            valid_windows = session_df
+        
+        sampled_windows = valid_windows.sample(num_windows, replace=False)
+        return sampled_windows
+
+    def sample_negative_windows(self, session_df, num_windows, exclude):
+        exclude_start_times = [window['start_time'] for window in exclude]
+        neg_mask = ~session_df['start_time'].isin(exclude_start_times)
+        negative_windows = session_df[neg_mask].sample(num_windows, replace=False)
+        return negative_windows
+
+    def read_signal(self, window):
+        signal_df = pd.read_parquet(window['signals_path'])
+        start_sample = int(window['start_time'] * self.sampling_rate)
+        end_sample = int(window['end_time'] * self.sampling_rate)
+
+
+        if signal_data.shape[0] < self.fixed_len:
+            pad_len = self.fixed_len - signal_data.shape[0]
+            signal_data = torch.cat([torch.tensor(signal_data), torch.zeros(pad_len, signal_data.shape[1])], dim=0)
+        else:
+            signal_data = torch.tensor(signal_data[:self.fixed_len, :]) 
+        return signal_df.values[start_sample:end_sample, :].T
+
