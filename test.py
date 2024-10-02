@@ -30,6 +30,27 @@ class RelativePositioningLoss(torch.nn.Module):
 
         return loss.mean()
 
+def balance_data(features, labels, num_classes=2):
+    label_indices = [np.where(labels == i)[0] for i in range(num_classes)]
+    
+    if any(len(indices) == 0 for indices in label_indices):
+        return features, labels 
+
+    max_class_count = max(len(indices) for indices in label_indices)
+    
+    balanced_features = []
+    balanced_labels = []
+
+    for i, indices in enumerate(label_indices):
+        upsampled_indices = np.random.choice(indices, size=max_class_count, replace=True)
+        balanced_features.append(features[upsampled_indices])
+        balanced_labels.append(np.full(max_class_count, i))
+
+    balanced_features = np.concatenate(balanced_features)
+    balanced_labels = np.concatenate(balanced_labels)
+
+    return balanced_features, balanced_labels
+
 
 
 def evaluate_model(test_loader, model):
@@ -75,17 +96,17 @@ device = 'cuda:2'
 
 
 CUDA_VISIBLE_DEVICES=2
-df = pd.read_parquet("/datasets2/epilepsy/TUSZ/processed/dev/segments.parquet")
-output_dir = "./data/test"
-sampling_rate=250
-target_sampling_rate=100
-lowpass_freq=50
-sfre = 100
-clip_length = 6
-clip_stride = 6
-all_clips_df = clips(df, sampling_rate, target_sampling_rate, output_dir, lowpass_freq,clip_length, clip_stride)
-all_clips_df.to_parquet('./data/processed.parquet', engine='pyarrow')
-#all_clips_df = pd.read_parquet('./data/processed.parquet')
+# df = pd.read_parquet("/datasets2/epilepsy/TUSZ/processed/dev/segments.parquet")
+# output_dir = "./data/test"
+# sampling_rate=250
+# target_sampling_rate=100
+# lowpass_freq=50
+# sfre = 100
+# clip_length = 6
+# clip_stride = 6
+# all_clips_df = clips(df, sampling_rate, target_sampling_rate, output_dir, lowpass_freq,clip_length, clip_stride)
+# all_clips_df.to_parquet('./data/processed.parquet', engine='pyarrow')
+all_clips_df = pd.read_parquet('./data/processed_train.parquet')
 all_clips_df = remove_short_segments(all_clips_df, 6)
 df = all_clips_df
 label_1_count = df[df['label'] == 1].shape[0]
@@ -99,7 +120,7 @@ emb = Shallow(1, 40)
 model = ContrastiveNet(emb, emb_size).to(device)
 
 
-model_path = './result/20240928_204648/model_RP.pt'  
+model_path = './result/RP/20241001_221746/shallow_RP.pt'  
 model.load_state_dict(torch.load(model_path, map_location=device))
 
 

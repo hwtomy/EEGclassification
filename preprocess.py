@@ -62,3 +62,18 @@ def remove_short_segments(df, min_duration):
     return filtered_df
 
 
+def filter_shortpatient(df, min=2):
+    df['duration'] = df['end_time'] - df['start_time']
+      
+    for session_id in patient_df.index.get_level_values('session').unique():
+        session_df = patient_df.xs(session_id, level='session', drop_level=False)
+        
+        label_1_df = session_df[session_df['label'] == 1]
+            
+        if len(label_1_df) < 2:
+                df = df.drop(session_id, level='session')
+    
+    return df
+
+
+
