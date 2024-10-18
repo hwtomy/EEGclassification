@@ -10,7 +10,7 @@ def clips(df, sampling_rate, target_sampling_rate, output_dir, lowpass_freq, cli
 
     print(df.head())
     df = prep(df, sampling_rate, target_sampling_rate, output_dir, lowpass_freq)
-    df = filter_patients(df)
+    #df = filter_patients(df)
     df['sampling_rate'] = df['sampling_rate'].replace(250, 100)
     print(df.head())
     all_clips_df = pd.DataFrame()
@@ -81,6 +81,7 @@ def clips(df, sampling_rate, target_sampling_rate, output_dir, lowpass_freq, cli
         # Concatenate clips to the main DataFrame
         all_clips_list.append(clips_df)
         #all_clips_df = pd.concat([all_clips_df, clips_df], ignore_index=False)
+    # print(all_clips_list.head())
     all_clips_df = pd.concat(all_clips_list, ignore_index=False)
 
     all_clips_df = remove_short_segments(all_clips_df, min_duration=6)

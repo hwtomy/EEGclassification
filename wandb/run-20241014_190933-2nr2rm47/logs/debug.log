@@ -1,0 +1,26 @@
+2024-10-14 19:09:33,244 INFO    MainThread:4050533 [wandb_setup.py:_flush():79] Current SDK version is 0.18.3
+2024-10-14 19:09:33,244 INFO    MainThread:4050533 [wandb_setup.py:_flush():79] Configure stats pid to 4050533
+2024-10-14 19:09:33,244 INFO    MainThread:4050533 [wandb_setup.py:_flush():79] Loading settings from /home/tiowang/.config/wandb/settings
+2024-10-14 19:09:33,245 INFO    MainThread:4050533 [wandb_setup.py:_flush():79] Loading settings from /home/tiowang/SSL/wandb/settings
+2024-10-14 19:09:33,245 INFO    MainThread:4050533 [wandb_setup.py:_flush():79] Loading settings from environment variables: {}
+2024-10-14 19:09:33,246 INFO    MainThread:4050533 [wandb_setup.py:_flush():79] Applying setup settings: {'mode': None, '_disable_service': None}
+2024-10-14 19:09:33,246 INFO    MainThread:4050533 [wandb_setup.py:_flush():79] Inferring run settings from compute environment: {'program_relpath': 'train3.py', 'program_abspath': '/home/tiowang/SSL/train3.py', 'program': '/home/tiowang/SSL/train3.py'}
+2024-10-14 19:09:33,246 INFO    MainThread:4050533 [wandb_setup.py:_flush():79] Applying login settings: {}
+2024-10-14 19:09:33,246 INFO    MainThread:4050533 [wandb_init.py:_log_setup():532] Logging user logs to /home/tiowang/SSL/wandb/run-20241014_190933-2nr2rm47/logs/debug.log
+2024-10-14 19:09:33,247 INFO    MainThread:4050533 [wandb_init.py:_log_setup():533] Logging internal logs to /home/tiowang/SSL/wandb/run-20241014_190933-2nr2rm47/logs/debug-internal.log
+2024-10-14 19:09:33,247 INFO    MainThread:4050533 [wandb_init.py:init():617] calling init triggers
+2024-10-14 19:09:33,248 INFO    MainThread:4050533 [wandb_init.py:init():624] wandb.init called with sweep_config: {}
+config: {'learning_rate': 0.0005, 'architecture': 'SHallow-deepsupervision', 'dataset': 'THU-seizure', 'epochs': 5000}
+2024-10-14 19:09:33,248 INFO    MainThread:4050533 [wandb_init.py:init():667] starting backend
+2024-10-14 19:09:33,249 INFO    MainThread:4050533 [wandb_init.py:init():671] sending inform_init request
+2024-10-14 19:09:33,250 INFO    MainThread:4050533 [backend.py:_multiprocessing_setup():104] multiprocessing start_methods=fork,spawn,forkserver, using: spawn
+2024-10-14 19:09:33,251 INFO    MainThread:4050533 [wandb_init.py:init():684] backend started and connected
+2024-10-14 19:09:33,254 INFO    MainThread:4050533 [wandb_init.py:init():779] updated telemetry
+2024-10-14 19:09:33,260 INFO    MainThread:4050533 [wandb_init.py:init():812] communicating run to backend with 90.0 second timeout
+2024-10-14 19:09:33,512 INFO    MainThread:4050533 [wandb_init.py:init():863] starting run threads in backend
+2024-10-14 19:09:33,861 INFO    MainThread:4050533 [wandb_run.py:_console_start():2465] atexit reg
+2024-10-14 19:09:33,861 INFO    MainThread:4050533 [wandb_run.py:_redirect():2313] redirect: wrap_raw
+2024-10-14 19:09:33,861 INFO    MainThread:4050533 [wandb_run.py:_redirect():2378] Wrapping output streams.
+2024-10-14 19:09:33,861 INFO    MainThread:4050533 [wandb_run.py:_redirect():2403] Redirects installed.
+2024-10-14 19:09:33,864 INFO    MainThread:4050533 [wandb_init.py:init():907] run started, returning control to user process
+2024-10-14 19:09:34,833 WARNING MsgRouterThr:4050533 [router.py:message_loop():77] message_loop has been closed

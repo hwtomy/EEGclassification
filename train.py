@@ -12,10 +12,10 @@ import os
 import shutil
 from tqdm import tqdm
 from clean import clear_directory
-from shallow import Shallow, ContrastiveNet
-from loss import RelativePositioningLossm
-from pretext import RPDataset, collate_fn, split_dataset, LabelDataset, taset, collate_fnt, balance_dataframe
-from preprocess import remove_short_segments
+from shallow import Shallow, ContrastiveNet, ContrastiveNet_deep, Shallow_deep_with_attention, Shallow_deep_with_selfattention, Shallow_deep_with_linformer
+from loss import RelativePositioningLoss
+from pretext import RPDataset, collate_fn, split_dataset, LabelDataset, taset, collate_fnt, balance_dataframe, RPDataset3
+from preprocess import remove_short_segments, filter_shortpatient
 from datetime import datetime
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, accuracy_score,  f1_score
@@ -23,187 +23,75 @@ from sklearn.linear_model import SGDClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_class_weight
 import pickle
+from torch.optim.lr_scheduler import CosineAnnealingLR
+import wandb
+from torch.cuda.amp import autocast, GradScaler
+from mlp import MLPBinaryClassifier, train_logistic_regression
 
 
-class RelativePositioningLoss(torch.nn.Module):
-    def __init__(self, emb_size, w0=0.0):
-        super(RelativePositioningLoss, self).__init__()
-        self.w = torch.nn.Parameter(torch.randn(emb_size))  
-        self.w0 = w0  
 
-    def forward(self, x1, x2, y):
-    
-        h_x1 = model(x1)  
-        h_x2 = model(x2)  
 
-        g_RP = torch.abs(h_x1 - h_x2)
 
-        score = torch.dot(self.w, g_RP.T) + self.w0
-        loss = torch.log(1 + torch.exp(-y * score))
-
-        return loss.mean()
-
-def train_model(train_loader, model, optimizer, criterion, epochs, threshold): 
+def train_model(train_loader, model, optimizer, criterion, scheduler, epochs, threshold): 
+    torch.autograd.set_detect_anomaly(True)
     model.train()
     device = 'cuda:2'
     floss = float('inf')
     loss_history = []
     tloss = []
+    pastloss = 0.0
     for epoch in range(epochs):
         running_loss = 0.0
-        pastloss = 0.0
+        #pastloss = 0.0
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")
         count = 0
         for batch_idx, batch_data in enumerate(progress_bar):
-            #print(f"Batch data: {batch_data}")
             optimizer.zero_grad()
             batch_loss = 0.0 
             anchor_data, paired_data, labels = zip(*batch_data)
-            # print(f"Anchor data list type: {type(anchor_data)}")
-            # print(f"First element type: {type(anchor_data[0])}")
-            # exit()
-            #anchor_data, paired_data, labels = batch_data
-            # print(f"Batch {batch_idx} - anchor_data shape: {anchor_data[0].shape}, paired_data shape: {paired_data[0].shape}")
-            # print(len(anchor_data))
 
             anchor_data = torch.stack([torch.tensor(x) if not isinstance(x, torch.Tensor) else x for x in anchor_data]).float().to(device)
             paired_data = torch.stack([torch.tensor(x) if not isinstance(x, torch.Tensor) else x for x in paired_data]).float().to(device)
             labels = torch.tensor(labels).float().to(device)
-            # for i in range(len(anchor_data)):
-            #     anchor_tensor = torch.tensor(anchor_data[i]).float().to(device)  
-            #     paired_tensor = torch.tensor(paired_data[i]).float().to(device)  
-            #     label_tensor = torch.tensor(labels[i]).float().to(device)
+    
     
             anchor_data = anchor_data.unsqueeze(1) 
             paired_data = paired_data.unsqueeze(1)
 
-
-            # output = model(anchor_data, paired_data)
-            
-            # loss = criterion(output, labels)
-
             output = model(anchor_data, paired_data)  
             loss = criterion(output, labels) 
             loss.backward()
+            
             running_loss += loss.item()
             optimizer.step()
+        scheduler.step()
 
-
-
-            # for i in range(len(batch_data)): 
-            #     anchor_datass = anchor_data[i]
-                
-  
-            #     paired_datass = paired_data[i]
-            #     labelss = labels[i]
-
-
-            #     anchor_datass = anchor_datass.unsqueeze(0).float().to(device)
-            #     paired_datass = paired_datass.unsqueeze(0).float().to(device)
-            #     #labelss = torch.tensor([labelss]).unsqueeze(0).float().to(device)
-
-            #     optimizer.zero_grad()
-            #     output = model(anchor_datass, paired_datass)
-
-            #     #print(output)
-            #     #print(labelss)
-            #     labelss = torch.tensor([labelss]).float().to(device).view_as(output)
-            #     loss = criterion(output, labelss)
-            #     batch_loss += loss
-
-            # batch_loss.backward() 
-            # optimizer.step()       
-            # running_loss += batch_loss.item()
 
                 
     
         closs = running_loss / len(train_loader)
+        current_lr = scheduler.get_last_lr()[0]
+        wandb.log({"loss": closs, "lr": current_lr})
         loss_history.append(closs)
-        if (abs(pastloss - closs) <= 0.03):
+        if (abs(pastloss - closs) <= 0.001):
             count += 1
         else:
             count = 0
         pastloss = closs
-        wandb.log({"loss": closs})
         
         print(f"Epoch {epoch + 1}/{epochs}, Loss: {closs}")
         if count == 10:
             return model
-        #test_loss = evaluate_model(test_loader, model)
-        #tloss.append(test_loss)
-        #print(f"Test Loss: {test_loss}")
-
-        # if abs(closs-floss) < threshold:
-        #     print(f"Early stopping at epoch {epoch + 1} with test loss {test}")
-        #     break
         floss = min(closs, floss)
   
 
-    # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # result_folder = os.path.join("./result", timestamp)
-    # os.makedirs(result_folder, exist_ok=True)
-
-    # model_save_path = os.path.join(result_folder, f"model_RP.pt")
-    # torch.save(model.state_dict(), model_save_path)
-
-
-    # df = pd.DataFrame({
-    #     "Epoch": range(1, len(loss_history) + 1),
-    #     "Loss": loss_history
-    # })
-    # loss_file_path = os.path.join(result_folder, 'trainloss.xlsx')
-    # df.to_excel(loss_file_path, index=False)
-
-
-    # df = pd.DataFrame({
-    #     "Epoch": range(1, len(tloss) + 1),
-    #     "Loss": tloss
-    # })
-    # loss_file_path = os.path.join(result_folder, 'testloss.xlsx')
-    # df.to_excel(loss_file_path, index=False)
+ 
     return model
 
 
 
 
-# def evaluate_model(test_loader, model):
-#     device = 'cuda:2'
-#     model.eval()  
-#     tbar = tqdm(test_loader, desc="Evaluation")  
-#     total_correct = 0  
-#     total_samples = 0  
-#     all_preds = []  
-#     all_labels = []  
-    
-#     with torch.no_grad(): 
-#         for batch_idx, batch_data in enumerate(tbar):
-#             x1_batch, labels = zip(*batch_data)
-#             # x1_batch = torch.stack([torch.tensor(x).float() for x in x1_batch]).to(device)
-#             # labels = torch.tensor(labels).float().to(device)
 
-#             x1_batch = torch.stack([x.clone().detach().float() for x in x1_batch]).to(device)
-#             labels = torch.tensor(labels)
-#             labels = labels.clone().detach().float().to(device)
-
-#             x1_batch = x1_batch.unsqueeze(1) 
-
-#             outputs = model.emb_net(x1_batch)
-
-#             preds = (outputs >= 0).float()
-#             #print(f"Preds: {preds}")
-#             total_correct += (preds == labels).sum().item()
-#             #print(labels.size(0))
-#             total_samples += preds.numel()
-
-#             all_preds.extend(preds.cpu().numpy())
-#             all_labels.extend(labels.cpu().numpy())
-#     #print(f"Total correct: {total_correct}")
-#     #print(f"Total samples: {total_samples}")
-#     accuracy = total_correct / total_samples
-    
-#     print(f"Test Accuracy: {accuracy}")
-    
-#     return accuracy
 
 
 def extract_features(model, data_loader, device='cuda:2'):
@@ -226,20 +114,9 @@ def extract_features(model, data_loader, device='cuda:2'):
     return extracted_features, labels
 
 
-# def balance_data(features, labels):
-#     label_1_indices = np.where(labels == 1)[0]
-#     label_0_indices = np.where(labels == 0)[0]
 
-#     if len(label_1_indices) == 0 or len(label_0_indices) == 0:
-#         return features, labels  
 
-#     label_1_upsampled = np.random.choice(label_1_indices, size=len(label_0_indices), replace=True)
 
-#     balanced_indices = np.concatenate([label_0_indices, label_1_upsampled])
-#     balanced_features = features[balanced_indices]
-#     balanced_labels = labels[balanced_indices]
-
-#     return balanced_features, balanced_labels
 
 
 def balance_data(features, labels, num_classes=2):
@@ -263,26 +140,10 @@ def balance_data(features, labels, num_classes=2):
 
     return balanced_features, balanced_labels
 
-
-def train_logistic_regression(train_features, train_labels, test_features, test_labels):
-    logistic_regression = LogisticRegression(C=1, max_iter=100)
-    
-    logistic_regression.fit(train_features, train_labels)
-
-    y_pred = logistic_regression.predict(test_features)
-    
-    print(classification_report(test_labels, y_pred, zero_division=0))
-    
-    print(f"Validation Accuracy: {accuracy_score(test_labels, y_pred)}")
-
-    return logistic_regression
-
-
-
 def evaluate_on_test_set_with_shallow(test_loader, model, logistic_model, device='cuda:2'):
    
     test_features, test_labels = extract_features( model, test_loader, device)
-    test_features, test_labels = balance_data(test_features, test_labels)
+    #test_features, test_labels = balance_data(test_features, test_labels)
     
     y_test_pred = logistic_model.predict(test_features)
     
@@ -310,51 +171,6 @@ def save_results_to_txt(file_path, accuracy, f1_macro, f1_micro):
         file.write(f"F1 Micro: {f1_micro}\n")
 
 
-
-
-def online_train_logistic_regression(train_loader, test_loader, model, device, num_classes=2, save_path='./features/'):
-    model.eval()
-    scaler = StandardScaler()  
-    logistic_model = SGDClassifier(loss='log_loss', max_iter=1000,  penalty="l2", class_weight="balanced")
-    all_classes_initialized = False
-    first_batch = True  
-    epoch = 0
-   
-    for batch_idx, batch_data in enumerate(train_loader):
-        with torch.no_grad():
-            anchor_data, labels = zip(*batch_data)
-            anchor_data = torch.stack([torch.tensor(x) if not isinstance(x, torch.Tensor) else x for x in anchor_data]).float().to(device)
-
-            anchor_data = anchor_data.unsqueeze(1)
-            features = model.emb_net(anchor_data).cpu().numpy() 
-        #balanced_features, balanced_labels = balance_data(features, np.array(labels))
-            labels = np.array(labels)
-
-        if first_batch or not all_classes_initialized:
-            features = scaler.fit_transform(features)
-            logistic_model.partial_fit(features, labels, classes=np.arange(num_classes)) 
-            all_classes_initialized = True
-            first_batch = False
-        else:
-            balanced_features = scaler.transform(features)
-            logistic_model.partial_fit(features, labels)
-
-        print(f"Processed batch {batch_idx + 1}")
-
-        if (batch_idx + 1) % len(train_loader) == 0: 
-            accuracy = evaluate_on_test_set(test_loader, model, logistic_model, scaler, device)
-            print(f"Test - Accuracy: {accuracy}")
-
-    os.makedirs(save_path, exist_ok=True)
-    with open(os.path.join(save_path, 'regression_model.pkl'), 'wb') as f:
-        pickle.dump(logistic_model, f)
-
-    return logistic_model
-
-
-
-
-
 def evaluate_on_test_set(test_loader, model, logistic_model, scaler, device):
 
     test_features, test_labels = extract_features(model, test_loader, device)
@@ -364,16 +180,86 @@ def evaluate_on_test_set(test_loader, model, logistic_model, scaler, device):
     y_test_pred = logistic_model.predict(test_features)
 
     accuracy = accuracy_score(test_labels, y_test_pred)
-    # f1_macro = f1_score(test_labels, y_test_pred, average='macro')
-    # f1_micro = f1_score(test_labels, y_test_pred, average='micro')
 
-    # print("Test Set Performance:")
     print(f"Accuracy: {accuracy}")
-    # print(f"F1 Macro: {f1_macro}")
-    # print(f"F1 Micro: {f1_micro}")
-    # print(classification_report(test_labels, y_test_pred))
 
     return accuracy
+
+
+def train_mlp(train_features, train_labels, test_features, test_labels, device='cuda:2'):
+    X_train = torch.tensor(train_features, dtype=torch.float32).to(device)
+    y_train = torch.tensor(train_labels, dtype=torch.float32).unsqueeze(1).to(device)
+    X_test = torch.tensor(test_features, dtype=torch.float32).to(device)
+    y_test = torch.tensor(test_labels, dtype=torch.float32).unsqueeze(1).to(device)
+    
+    mlp_model = MLPBinaryClassifier(input_size=train_features.shape[1]).to(device)
+    criterion = nn.BCELoss()  
+    optimizer = Adam(model.parameters(), lr=0.001, betas=(0.9, 0.999))
+    scheduler = CosineAnnealingLR(optimizer, T_max=150, eta_min=0.0001)
+    
+    epochs = 150
+    for epoch in tqdm(range(epochs), desc="Training MLP", unit="epoch"):
+        mlp_model.train()
+        optimizer.zero_grad()
+        outputs = mlp_model(X_train)
+        loss = criterion(outputs, y_train)
+        loss.backward()
+        optimizer.step()
+        scheduler.step()
+        
+        if (epoch+1) % 10 == 0:
+            print(f"Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}")
+        wandb.log({"MLP_loss": loss})
+    mlp_model.eval()
+    with torch.no_grad():
+        y_pred = mlp_model(X_test)
+        y_pred_class = (y_pred > 0.5).float()
+        y_pred_class = y_pred_class.squeeze().cpu().numpy()
+
+        #print(classification_report(test_labels, y_pred_class, zero_division=0))
+        print(f"Validation Accuracy: {accuracy_score(test_labels, y_pred_class):.4f}")
+
+    return mlp_model
+
+
+# def evaluate_on_test_set_with_shallow(test_loader, model, mlp_model, device='cuda:2'):
+ 
+#     test_features, test_labels = extract_features(model, test_loader, device)
+#     test_features, test_labels = balance_data(test_features, test_labels)
+    
+
+#     test_features = torch.tensor(test_features, dtype=torch.float32).to(device)
+#     test_labels = torch.tensor(test_labels, dtype=torch.float32).to(device)
+    
+
+#     mlp_model.eval()
+    
+#     with torch.no_grad():
+
+#         y_test_pred = mlp_model(test_features)
+#         y_test_pred = (y_test_pred > 0.5).float()  
+#         y_test_pred = y_test_pred.cpu().numpy()  
+    
+#     test_labels = test_labels.cpu().numpy()
+    
+#     print("Test Set Performance:")
+#     print(classification_report(test_labels, y_test_pred, zero_division=0))
+    
+#     accuracy = accuracy_score(test_labels, y_test_pred)
+#     print(f"Test Accuracy: {accuracy}")
+    
+#     f1_macro = f1_score(test_labels, y_test_pred, average='macro', zero_division=0)
+#     f1_micro = f1_score(test_labels, y_test_pred, average='micro', zero_division=0)
+
+#     return accuracy, f1_macro, f1_micro
+
+
+def save_results_to_txt(file_path, accuracy, f1_macro, f1_micro, mlpt):
+    with open(file_path, 'w') as file:
+        file.write(f"Test Accuracy: {accuracy}\n")
+        file.write(f"F1 Macro: {f1_macro}\n")
+        file.write(f"F1 Micro: {f1_micro}\n")
+        file.write(f"Model: {mlpt}\n")
 
 
 
@@ -387,10 +273,10 @@ wandb.init(
 
     # track hyperparameters and run metadata
     config={
-    "learning_rate": 0.001,
-    "architecture": "SHallow",
+    "learning_rate": 0.0005,
+    "architecture": "SHallow-deepsupervision",
     "dataset": "THU-seizure",
-    "epochs":150,
+    "epochs":1500,
     }
 )
 
@@ -409,6 +295,7 @@ clip_stride = 6
 #all_clips_df.to_parquet('./data/processed_train.parquet', engine='pyarrow')
 all_clips_df = pd.read_parquet('./data/processed_train.parquet')
 all_clips_df = remove_short_segments(all_clips_df, 6)
+all_clips_df = filter_shortpatient(all_clips_df, 2)
 df = all_clips_df
 label_1_count = df[df['label'] == 1].shape[0]
 label_0_count = df[df['label'] == 0].shape[0]
@@ -419,29 +306,35 @@ print(f"Label 0 count: {label_0_count}")
 device = 'cuda:2'
 #torch.cuda.empty_cache()
 emb_size = 100
-emb = Shallow(1, 40)
+# emb = Shallow(1, 40)
+emb = Shallow_deep_with_attention(1, 40)
+# model = ContrastiveNet_deep(emb, emb_size).to(device)
 model = ContrastiveNet(emb, emb_size).to(device)
-optimizer = Adam(model.parameters(), lr=0.001, betas=(0.9, 0.999))
-criterion = RelativePositioningLossm(emb_size).to(device)
+optimizer = Adam(model.parameters(), lr=0.0005, betas=(0.9, 0.999), weight_decay=1e-4)
+scheduler = CosineAnnealingLR(optimizer, T_max=3000, eta_min=0.00001)
+criterion = RelativePositioningLoss(emb_size).to(device)
+# criterion = RelativePositioningLoss_deep(emb_size).to(device)
 #print(df.head())
 train_df, test_df = split_dataset(all_clips_df)
+train_df.to_parquet('./data/processed_trains.parquet', engine='pyarrow')
+test_df.to_parquet('./data/processed_tests.parquet', engine='pyarrow')
 session_count = train_df['session'].nunique()
 #print(f"Number of unique sessions: {session_count}")
-train_dataset = RPDataset(train_df, tau_pos=18, tau_neg=90)
+train_dataset = RPDataset(train_df, tau_pos=18, tau_neg=60)
 #print(train_dataset[0])
 
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True,collate_fn=collate_fn, num_workers=16)
 
 
 
-trained_model=train_model(train_loader, model, optimizer, criterion, epochs=150, threshold=0.01)
+trained_model=train_model(train_loader, model, optimizer, criterion,scheduler, epochs=3000, threshold=0.01)
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 result_folder = os.path.join("./result/RP/", timestamp)
 
 os.makedirs(result_folder, exist_ok=True)
 
 model_save_path = os.path.join(result_folder, f"shallow_RP.pt")
-torch.save(model.state_dict(), model_save_path)
+torch.save(trained_model.state_dict(), model_save_path)
 
 train_df = balance_dataframe(train_df)
 print("success")
@@ -469,6 +362,13 @@ model_path = os.path.join(result_folder, 'logistic.pkl')
 with open(model_path, 'wb') as f:
     pickle.dump(logistic_model, f)
 
+# mlp_model = train_mlp(train_features,train_labels, test_features, test_labels)
+
+
+# os.makedirs(result_folder, exist_ok=True)
+# model_save_path = os.path.join(result_folder, f"mlp_RP.pt")
+# torch.save(mlp_model.state_dict(), model_save_path)
+
 
 
 #logistic_model = online_train_logistic_regression(train_loader, test_loader, trained_model, device, save_path=result_folder)
@@ -478,9 +378,13 @@ with open(model_path, 'wb') as f:
 
 
 print("Evaluation result")
-all_clips_df = pd.read_parquet('./data/processed.parquet')
+all_clips_df = pd.read_parquet('./data/processed_test.parquet')
+all_clips_df = all_clips_df.groupby(level='session').filter(lambda x: (x['label'] != 0).any())
 all_clips_df = remove_short_segments(all_clips_df, 6)
 df = all_clips_df
+df['label'] = df['label'].replace(3, 1)
+df['label'] = df['label'].replace(2, 1)
+df['label'] = df['label'].replace(4, 1)
 df = balance_dataframe(df)
 test_dataset = taset(df)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=True,collate_fn=collate_fnt, num_workers=8)
@@ -488,7 +392,8 @@ accuracy, f1_macro, f1_micro = evaluate_on_test_set_with_shallow(test_loader, tr
 wandb.log({"accuracy": accuracy, "f1_macro": f1_macro, "f1_micro": f1_micro})
 
 result_file_path = os.path.join(result_folder, 'result.txt')
-save_results_to_txt(result_file_path, accuracy, f1_macro, f1_micro)
+save_results_to_txt(result_file_path, accuracy, f1_macro, f1_micro, "logistic")
+
 
 wandb.finish()
 
