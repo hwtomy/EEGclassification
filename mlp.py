@@ -18,22 +18,27 @@ class MLPBinaryClassifier(nn.Module):
     def __init__(self, input_size):
         super(MLPBinaryClassifier, self).__init__()
         self.model = nn.Sequential(
-            nn.Linear(input_size, 64),  
-            nn.BatchNorm1d(64),       
-            nn.ReLU(), 
-            nn.Dropout(0.5),  
+            # nn.Linear(input_size, 128),  
+            # nn.BatchNorm1d(128),       
+            # nn.LeakyReLU(), 
+            # nn.Dropout(0.5),  
 
             # nn.Linear(128, 64),       
             # nn.BatchNorm1d(64),  
             # nn.ReLU(),
             # nn.Dropout(0.5),  
 
-            nn.Linear(64, 32),       
-            nn.BatchNorm1d(32),  
-            nn.ReLU(),
+            # nn.Linear(64, 32),       
+            # nn.BatchNorm1d(32),  
+            # nn.LeakyReLU(),
+            # nn.Dropout(0.5), 
+
+            nn.Linear(64, 16),       
+            nn.BatchNorm1d(16),  
+            nn.LeakyReLU(),
             nn.Dropout(0.5), 
 
-            nn.Linear(32, 1),           
+            nn.Linear(16, 1),           
             nn.Sigmoid()                
         )
     
@@ -99,7 +104,7 @@ def train_random_forest(train_features, train_labels, test_features, test_labels
 
 
 def train_logistic_regression(train_features, train_labels, test_features, test_labels):
-    weights = {0: 1, 1: 1.4}
+    weights = {0: 1, 1: 1.2}
     logistic_regression = LogisticRegression(C=0.5, max_iter=10000000, class_weight=weights)
     
     logistic_regression.fit(train_features, train_labels)
@@ -125,11 +130,11 @@ def train_logistic_regression(train_features, train_labels, test_features, test_
 
 def train_xgboost(train_features, train_labels, test_features, test_labels):
     xgb_model = xgb.XGBClassifier(
-    n_estimators=1000,
+    n_estimators=200,
     learning_rate=0.01,
     subsample=0.7,
     colsample_bytree=0.6,
-    scale_pos_weight=1,
+    scale_pos_weight=1.1,
     gamma=2,
     random_state=42,
     # reg_alpha=0.1, 
@@ -156,7 +161,7 @@ def train_xgboost(train_features, train_labels, test_features, test_labels):
 
 def train_svm_rbf(train_features, train_labels, test_features, test_labels):
     weights = {0: 1, 1: 1.2}
-    svm_model = SVC(kernel='poly', C=0.1, max_iter=1000000, class_weight=weights)
+    svm_model = SVC(kernel='poly', C = 0.5, max_iter=1000000, class_weight=weights)
     
     svm_model.fit(train_features, train_labels)
 

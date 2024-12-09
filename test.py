@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import DataLoader
 import torch.nn as nn
 import pandas as pd
-from shallow import Shallow, ContrastiveNet, Shallow_deep_with_selfattention, Shallow_deep_with_attention, Shallow_deep_with_linformer
+from shallow import Shallow, ContrastiveNet, Shallow_deep_with_selfattention, Shallow_deep_with_attention, Shallow_deep_with_linformer, Shallow_cwt_with_attention, Shallow_deep
 from pretext import taset, collate_fnt, balance_dataframe, split_dataset, split_dataset1 
 from torch.optim import Adam
 from rp import clips
@@ -12,7 +12,7 @@ import os
 import shutil
 from tqdm import tqdm  
 from preprocess import remove_short_segments, filter_shortpatient
-from shallow import Shallow, ContrastiveNet
+from shallow import Shallow, ContrastiveNet, Shallow_wt_with_attentionc, FFT_GNN, FFT_GNN1
 import numpy as np
 from sklearn.model_selection import train_test_split
 from datetime import datetime
@@ -48,7 +48,7 @@ import pickle
 
 #     return balanced_features, balanced_labels
 
-def extract_features(model, data_loader, device='cuda:3'):
+def extract_features(model, data_loader, device='cuda:2'):
     model.eval()
     extracted_features = []
     labels = []
@@ -70,7 +70,7 @@ def extract_features(model, data_loader, device='cuda:3'):
 
 
 
-# def evaluate_on_test_set_with_shallow(test_loader, model, mlp_model, device='cuda:3'):
+# def evaluate_on_test_set_with_shallow(test_loader, model, mlp_model, device='cuda:2'):
  
 #     test_features, test_labels = extract_features(model, test_loader, device)
 #     test_features, test_labels = balance_data(test_features, test_labels)
@@ -105,7 +105,7 @@ def extract_features(model, data_loader, device='cuda:3'):
 
 
 
-def evaluate_on_test_set_with_shallow(test_loader, model, logistic_model, device='cuda:3'):
+def evaluate_on_test_set_with_shallow(test_loader, model, logistic_model, device='cuda:2'):
    
     test_features, test_labels = extract_features( model, test_loader, device)
     
@@ -138,20 +138,20 @@ def save_results_to_txt(file_path, accuracy, f1_macro, f1_micro):
 
 
 
-def train_mlp(train_features, train_labels, test_features, test_labels, device='cuda:3'):
+def train_mlp(train_features, train_labels, test_features, test_labels, device='cuda:2'):
 
     scaler = StandardScaler()
     X_train = torch.tensor(train_features, dtype=torch.float32).to(device)
     y_train = torch.tensor(train_labels, dtype=torch.float32).unsqueeze(1).to(device)
     X_test = torch.tensor(test_features, dtype=torch.float32).to(device)
     y_test = torch.tensor(test_labels, dtype=torch.float32).unsqueeze(1).to(device)
-    
-    mlp_model = ResNetClassifier().to(device)
+    inputsize = X_train.shape[1]
+    mlp_model = MLPBinaryClassifier(inputsize).to(device)
     criterion = nn.BCELoss()  
-    optimizer = Adam(mlp_model.parameters(), lr=0.0005, betas=(0.9, 0.999), weight_decay=1e-6)
-    scheduler = CosineAnnealingLR(optimizer, T_max=300, eta_min=0.00005)
+    optimizer = Adam(mlp_model.parameters(), lr=0.0005, betas=(0.9, 0.999), weight_decay=1e-4)
+    scheduler = CosineAnnealingLR(optimizer, T_max=200000 , eta_min=0.00005)
     
-    epochs =300
+    epochs =200000
     for epoch in tqdm(range(epochs), desc="Training MLP", unit="epoch"):
         mlp_model.train()
         optimizer.zero_grad()
@@ -161,8 +161,8 @@ def train_mlp(train_features, train_labels, test_features, test_labels, device='
         optimizer.step()
         scheduler.step()
         
-        if (epoch+1) % 100 == 0:
-            print(f"Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}")
+        # if (epoch+1) % 100 == 0:
+        #     print(f"Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}")
     mlp_model.eval()
     with torch.no_grad():
         y_pred = mlp_model(X_test)
@@ -229,16 +229,16 @@ df = all_clips_df
 # print(f"Label 2 count: {label_2_count}")
 # print(f"Label 1 count: {label_1_count}")
 # print(f"Label 0 count: {label_0_count}")
-device = 'cuda:3'
+device = 'cuda:2'
 
-emb_size = 100
-emb = Shallow_deep_with_selfattention(1, 40)
+emb_size = 64
+emb = FFT_GNN(1, 40)
 model = ContrastiveNet(emb, emb_size).to(device)
 
-model_path = './result/RP/20241017_151145/shallow_RP.pt'
+model_path = './result/RP/20241207_102127/shallow_RP.pt'
 model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
 trained_model = model
-#all_clips_df = balance_dataframe(all_clips_df)
+# all_clips_df = balance_dataframe(all_clips_df)
 #print(all_clips_df.head())
 train_df, test_df = split_dataset(all_clips_df)
 
@@ -251,10 +251,10 @@ os.makedirs(result_folder, exist_ok=True)
 train_df = balance_dataframe(train_df)
 print("success")
 train_dataset = taset(train_df)
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True,collate_fn=collate_fnt, num_workers=0)
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True,collate_fn=collate_fnt, num_workers=8)
 test_df = balance_dataframe(test_df)
 test_dataset = taset(test_df)
-test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False,collate_fn = collate_fnt, num_workers=0)
+test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False,collate_fn = collate_fnt, num_workers=8)
 
 
 

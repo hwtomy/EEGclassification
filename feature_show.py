@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import DataLoader
 import pandas as pd
-from shallow import Shallow, ContrastiveNet, Shallow_deep_with_selfattention, Shallow_deep_with_attention
+from shallow import Shallow, ContrastiveNet, Shallow_deep_with_selfattention, Shallow_deep_with_attention, Shallow_deep
 from pretext import taset, collate_fnt, balance_dataframe        
 from torch.optim import Adam
 from rp import clips
@@ -59,10 +59,10 @@ def extract_features(model, data_loader, device='cuda:3'):
 
 device = 'cuda:3'
 emb_size = 100
-emb = Shallow_deep_with_selfattention(1, 40)
+emb = Shallow_deep(1, 40)
 model = ContrastiveNet(emb, emb_size).to(device)
 
-model_path = './result/RP/20241017_151145/shallow_RP.pt'
+model_path = './result/RP/20241024_151530/shallow_RP.pt'
 model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
 all_clips_df = pd.read_parquet('./data/processed_train.parquet')
 all_clips_df = remove_short_segments(all_clips_df, 6)
@@ -87,7 +87,7 @@ scatter = plt.scatter(features_2d[:, 0], features_2d[:, 1], c=labels, cmap='viri
 plt.colorbar(scatter)
 save_dir = './result/RP'
 plt.title("t-SNE Feature Distribution with Labels")
-save_path = os.path.join(save_dir, 'tsne_features_10171.png')
+save_path = os.path.join(save_dir, 'tsne_features_10211.png')
 plt.savefig(save_path)
 
 
@@ -120,7 +120,7 @@ scatter = plt.scatter(features_2d[:, 0], features_2d[:, 1], c=labels, cmap='viri
 plt.colorbar(scatter)
 save_dir = './result/RP'
 plt.title("t-SNE Feature Distribution with Labels")
-save_path = os.path.join(save_dir, 'tsne_features_10172.png')
+save_path = os.path.join(save_dir, 'tsne_features_10212.png')
 plt.savefig(save_path)
 
 

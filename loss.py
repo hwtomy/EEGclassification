@@ -85,3 +85,25 @@ class RelativePositioningLoss_deep(torch.nn.Module):
 
         return total_loss
 
+
+import torch
+import torch.nn.functional as F
+
+def info_nce_loss(anchor, positive, negatives, temperature=0.07):
+ 
+
+    pos_sim = F.cosine_similarity(anchor, positive) / temperature
+    
+
+    neg_sim = torch.bmm(negatives, anchor.unsqueeze(2)).squeeze(2) / temperature
+    
+
+    labels = torch.zeros(anchor.size(0), dtype=torch.long).to(anchor.device)
+    
+
+    logits = torch.cat((pos_sim.unsqueeze(1), neg_sim), dim=1)
+
+    loss = F.cross_entropy(logits, labels)
+    return loss
+
+

@@ -7,6 +7,12 @@ import random
 import pandas as pd
 import numpy as np
 from torch.utils.data._utils.collate import default_collate
+import torch
+from torch_geometric.utils import dense_to_sparse
+from torch_geometric.data import Data
+import os
+import sys
+import pickle
 
 class RPDataset(Dataset):
     def __init__(self, clips_df, tau_pos, tau_neg, sampling_rate=100, num_pairs=400):
@@ -249,7 +255,7 @@ def collate_fn(batch):
  
 
     for pairs in batch:
-        for anchor_data, paired_data, label, in pairs:
+        for anchor_data, paired_data, label in pairs:
             anchor_data = torch.tensor(anchor_data)
             paired_data = torch.tensor(paired_data)
 
@@ -263,7 +269,7 @@ def collate_fn(batch):
   
 
 
-        return list(zip(anchor_data_list, paired_data_list, labels_list))
+    return list(zip(anchor_data_list, paired_data_list, labels_list))
 
 
 
@@ -281,7 +287,7 @@ def collate_fnt(batch):
             labels_list.append(label)
 
 
-        return list(zip(anchor_data_list, labels_list))
+    return list(zip(anchor_data_list, labels_list))
 
 
 class taset(Dataset):
@@ -1206,10 +1212,261 @@ class RPDataset6(Dataset):
         return signal_df.values[start_sample:end_sample, :].T
 
 
+class tifrc(Dataset):
+    def __init__(self, clips_df):
+        self.clips_df = clips_df
+        self.sessions = list(self.clips_df.groupby('session'))
 
 
+    def __len__(self):
+        return len(self.sessions)
+
+    def __getitem__(self, index):
+        for _, anchor_window in session_df.iterrows():
+            pos = self.read_signal(anchor_window)
+            pos = abs(np.fft.fft(pos))
+            neg_pairs = self.get_positive_window(anchor_window, session_df)
+            paired_data = self.read_signal(paired_window)
+
+            paired_data = self.read_signal(paired_window)
+
+            pairs.append((anchor_data, pos, paired_data))
+
+        return pairs
+
+    def get_negative_window(self, anchor_window, session_df):
+        neg_mask = (session_df['start_time'] < anchor_window['start_time'] - self.tau_neg) | \
+                   (session_df['start_time'] > anchor_window['start_time'] + self.tau_neg)
+        neg_samples = session_df[neg_mask]
+
+        if len(neg_samples) == 0:
+            return None
+
+        return neg_samples.sample(1).iloc[0]
+
+    def read_signal(self, window):
+        if not hasattr(self, 'signal_cache'):
+            self.signal_cache = {}
+        signal_path = window['signals_path']
+        if signal_path not in self.signal_cache:
+            self.signal_cache[signal_path] = pd.read_parquet(signal_path)
+        signal_df = self.signal_cache[signal_path]
+        start_sample = int(window['start_time'] * self.sampling_rate)
+        end_sample = int(window['end_time'] * self.sampling_rate)
+        return signal_df.values[start_sample:end_sample, :].T
 
 
+def process_pairs(pairs, fft_points=400, sampling_rate=100, freq_range=(0.5, 40), target_length=600):
+
+    with open('./data/adj_mx_3d.pkl', 'rb') as pf:
+        adj_mx_data = pickle.load(pf)
+
+    adj_mx = adj_mx_data[2] 
+    adj_mx = torch.tensor(adj_mx, dtype=torch.float32)
+
+    edge_index, edge_weight = dense_to_sparse(adj_mx)
+    freq_res = sampling_rate / fft_points
+    freq_start = int(freq_range[0] / freq_res)
+    freq_end = int(freq_range[1] / freq_res)
+    
+    data_list = []
+    data_list1 = []
+    for data in pairs:
+        anchor_data, paired_data, label = zip(*data)
+        anchor_data = np.array(anchor_data)
+        paired_data = np.array(paired_data)
+
+        if anchor_data.shape[1] < target_length:
+            pad_size = target_length - anchor_data.shape[1]
+            anchor_data = torch.nn.functional.pad(anchor_data, (0, pad_size))
+        if paired_data.shape[1] < target_length:
+            pad_size = target_length - paired_data.shape[1]
+            paired_data = torch.nn.functional.pad(paired_data, (0, pad_size))
+        
+
+        anchor_fft = torch.fft.fft(anchor_data, n=fft_points, dim=-1)
+        paired_fft = torch.fft.fft(paired_data, n=fft_points, dim=-1)
+
+        anchor_fft = torch.abs(anchor_fft)[:, freq_start:freq_end]
+        paired_fft = torch.abs(paired_fft)[:, freq_start:freq_end]
+
+        anchor_graph = Data(
+            x=anchor_fft,
+            edge_index=edge_index,
+            edge_attr=edge_weight,
+            y=torch.tensor([label])
+        )
+        
+        paired_graph = Data(
+            x=paired_fft,
+            edge_index=edge_index,
+            edge_attr=edge_weight,
+            y=torch.tensor([label])
+        )
+        
+        data_list.append(anchor_graph)
+        data_list1.append(paired_graph)
+    
+    return data_list, data_list1
+
+def process_sin(pairs, fft_points=400, sampling_rate=100, freq_range=(0.5, 40), target_length=600):
+    with open('./data/adj_mx_3d.pkl', 'rb') as pf:
+        adj_mx_data = pickle.load(pf)
+
+    adj_mx = adj_mx_data[2] 
+    adj_mx = torch.tensor(adj_mx, dtype=torch.float32)
+
+    edge_index, edge_weight = dense_to_sparse(adj_mx)
+    freq_res = sampling_rate / fft_points
+    freq_start = int(freq_range[0] / freq_res)
+    freq_end = int(freq_range[1] / freq_res)
+    
+    data_list = []
+    for window, label in pairs:
+        signal_data = window
+        if signal_data.shape[1] < target_length:
+            pad_size = target_length - signal_data.shape[1]
+            signal_data = torch.nn.functional.pad(signal_data, (0, pad_size)) 
+
+        signal_fft = torch.fft.fft(signal_data, n=fft_points, dim=-1)
+        signal_fft = torch.abs(signal_fft)[:, freq_start:freq_end]
+
+        graph = Data(
+            x=signal_fft,
+            edge_index=edge_index,
+            edge_attr=edge_weight,
+            y=torch.tensor([label])
+        )
+        
+        data_list.append(graph)
+    return data_list
+
+class APN(Dataset):
+    def __init__(self, clips_df, tau_pos, tau_neg, sampling_rate=100, num_pairs=400):
+        self.clips_df = clips_df
+        self.tau_pos = tau_pos
+        self.tau_neg = tau_neg
+        self.sampling_rate = sampling_rate
+        self.num_pairs = num_pairs
+
+    
+        self.sessions = list(self.clips_df.groupby('session'))
+
+    def __len__(self):
+        return len(self.sessions)
+
+    def __getitem__(self, index):
+    
+        session_id, session_df = self.sessions[index]
+        
+
+        pos_pairs = self.generate_pairs(session_df, num_pairs=200)
+  
+
+        if len(pos_pairs) <200 or len(neg_pairs) < 200:
+            #print(f"Skipping session {session_id}, not enough pairs")
+            return []
+        #print(f"Generated {len(pos_pairs)} positive pairs and {len(neg_pairs)} negative pairs")
+        # if (len(pos_pairs)+len(neg_pairs)) > 400:
+        #     if (len(neg_pairs) > 200 and len(pos_pairs) < 200):
+        #         neg_pairs = random.sample(neg_pairs, 400-len(pos_pairs))
+        #     elif (len(neg_pairs) > 200 and len(pos_pairs) > 200):
+        #         pos_pairs = random.sample(pos_pairs, 200)
+        #         neg_pairs = random.sample(neg_pairs, 200)
+        #     else:
+        #         pos_pairs = random.sample(pos_pairs, 400-len(neg_pairs))
+                
+        all_pairs = pos_pairs + neg_pairs
+        #random.shuffle(all_pairs)
+
+        return all_pairs
+
+    def generate_pairs(self, session_df, num_pairs):
+        pairs = []
+        att = 0
+        maxa = 400
+        while len(pairs) < num_pairs and att < maxa:
+            anchor_window = session_df.sample(1).iloc[0]
 
 
+            pos_window = self.get_positive_window(anchor_window, session_df)
+            label = 1 
+            neg_window = self.get_negative_window(anchor_window, session_df)
+            label1 = -1  
 
+            if paired_window is None:
+                att += 1
+                continue
+
+            anchor_data = self.read_signal(anchor_window)
+            pos_data = self.read_signal(pos_window)
+            neg_data = self.read_signal(neg_window)
+
+            pairs.append((anchor_data, pos_data, label, neg_data, label1))
+            att += 1
+
+        return pairs
+
+    def get_positive_window(self, anchor_window, session_df):
+        pos_mask = (session_df['start_time'] >= anchor_window['start_time'] - self.tau_pos) & \
+                   (session_df['start_time'] <= anchor_window['start_time'] + self.tau_pos)
+        pos_samples = session_df[pos_mask]
+        
+        if len(pos_samples) == 0:
+            return None
+
+
+        return pos_samples.sample(1).iloc[0]
+
+    def get_negative_window(self, anchor_window, session_df):
+        neg_mask = (session_df['start_time'] < anchor_window['start_time'] - self.tau_neg) | \
+                   (session_df['start_time'] > anchor_window['start_time'] + self.tau_neg)
+        neg_samples = session_df[neg_mask]
+
+        if len(neg_samples) == 0:
+            return None
+
+        return neg_samples.sample(1).iloc[0]
+
+
+    def read_signal(self, window):
+        if not hasattr(self, 'signal_cache'):
+            self.signal_cache = {}
+        signal_path = window['signals_path']
+        if signal_path not in self.signal_cache:
+            self.signal_cache[signal_path] = pd.read_parquet(signal_path)
+        signal_df = self.signal_cache[signal_path]
+        start_sample = int(window['start_time'] * self.sampling_rate)
+        end_sample = int(window['end_time'] * self.sampling_rate)
+        return signal_df.values[start_sample:end_sample, :].T
+
+def collate_fnD(batch):
+    fixed_len = 600 
+
+    anchor_data_list = []
+    paired_data_list = []
+    neg_data_list = []
+    label_list = []
+    label1_list = []
+ 
+
+    for pairs in batch:
+        for anchor_data, pos_data, label, neg_data, label1 in pairs:
+            anchor_data = torch.tensor(anchor_data)
+            pos_data = torch.tensor(pos_data)
+            neg_data = torch.tensor(neg_data)
+            
+            anchor_data_padded = pad_to_fixed_len(anchor_data, fixed_len)
+            pos_data_padded = pad_to_fixed_len(pos_data, fixed_len)
+            neg_data_padded = pad_to_fixed_len(neg_data, fixed_len)
+
+            anchor_data_list.append(anchor_data_padded)
+            paired_data_list.append(paired_data_padded)
+            neg_data_list.append(neg_data_padded)
+
+            label_list.append(label)
+            label1_list.append(label1)
+  
+
+
+        return list(zip(anchor_data_list, pos_data_list, label_list, neg_data_list, label1_list))

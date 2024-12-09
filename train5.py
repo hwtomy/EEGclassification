@@ -12,10 +12,10 @@ import os
 import shutil
 from tqdm import tqdm
 from clean import clear_directory
-from shallow import Shallow, ContrastiveNet, Shallow_deep_with_attention, Shallow_deep_with_performer, Shallow_deep_with_selfattention, Shallow_deep_with_linformer, Shallow_deep
-from shallow import FFT_Linearformer_Transformer_GNN, FFT_Linearformer_GNNs, Shallow_cwt_with_attention, FFT_GNN1, FFT_GNN
-from loss import RelativePositioningLossm
-from pretext import RPDataset, collate_fn, split_dataset, LabelDataset, taset, collate_fnt, balance_dataframe, RPDataset2, RPDataset3, RPDataset4
+from shallow import Shallow, ContrastiveNet, ContrastiveNet_deep, Shallow_deep_with_attention, Shallow_deep_with_selfattention, Shallow_deep_with_linformer, mulconv
+from shallow import Shallow_cwt_with_attention, Shallow_wt_with_attentionc, Shallow_wt_with_attentionc, FFT_GNN
+from loss import RelativePositioningLoss
+from pretext import RPDataset, collate_fn, split_dataset, LabelDataset, taset, collate_fnt, balance_dataframe, RPDataset3, APN
 from preprocess import remove_short_segments, filter_shortpatient
 from datetime import datetime
 from sklearn.linear_model import LogisticRegression
@@ -24,22 +24,24 @@ from sklearn.linear_model import SGDClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_class_weight
 import pickle
-import wandb
-import random
 from torch.optim.lr_scheduler import CosineAnnealingLR
+import wandb
+from torch.cuda.amp import autocast, GradScaler
 from mlp import MLPBinaryClassifier, train_logistic_regression
-from loss import RelativePositioningLoss
+
+
 
 
 
 def train_model(train_loader, model, optimizer, criterion, scheduler, epochs, threshold): 
     torch.autograd.set_detect_anomaly(True)
     model.train()
-    device = 'cuda:3'
+    device = 'cuda:2'
     floss = float('inf')
     loss_history = []
     tloss = []
     pastloss = 0.0
+
     for epoch in range(epochs):
         running_loss = 0.0
         #pastloss = 0.0
@@ -48,25 +50,36 @@ def train_model(train_loader, model, optimizer, criterion, scheduler, epochs, th
         for batch_idx, batch_data in enumerate(progress_bar):
             optimizer.zero_grad()
             batch_loss = 0.0 
-            anchor_data, paired_data, labels = zip(*batch_data)
+            anchor_data, pos_data,label, neg_data,label1 = zip(*batch_data)
 
             anchor_data = torch.stack([torch.tensor(x) if not isinstance(x, torch.Tensor) else x for x in anchor_data]).float().to(device)
-            paired_data = torch.stack([torch.tensor(x) if not isinstance(x, torch.Tensor) else x for x in paired_data]).float().to(device)
-            labels = torch.tensor(labels).float().to(device)
-    
-    
+            pos_data = torch.stack([torch.tensor(x) if not isinstance(x, torch.Tensor) else x for x in paired_data]).float().to(device)
+            neg_data = torch.stack([torch.tensor(x) if not isinstance(x, torch.Tensor) else x for x in neg_data]).float().to(device)
+            label = torch.tensor(labels).float().to(device)
+            label1 = torch.tensor(labels1).float().to(device)
+            freq_resolution = 0.25
+            freq_bins = {
+                'initial': int(0.5 / freq_resolution),
+                'gamma': int(40 / freq_resolution)
+                        }
             anchor_data = anchor_data.unsqueeze(1) 
-            paired_data = paired_data.unsqueeze(1)
+            pos_data = pos_data.unsqueeze(1)
+            neg_data = neg_data.unsqueeze(1)
+            anf = torch.fft.fft(anchor_data, n=400, dim=-1)
+            anf = torch.abs(anf) 
+            anf = anf[:, :, self.freq_bins['initial']:self.freq_bins['gamma']]
+            neg = torch.fft.fft(neg_data, n=400, dim=-1)
+            neg = torch.abs(neg)
+            neg = neg[:, :, self.freq_bins['initial']:self.freq_bins['gamma']]
 
+            
             output = model(anchor_data, paired_data)  
             loss = criterion(output, labels) 
-            # print(loss)
-            # print(loss.size())
             loss.backward()
             
             running_loss += loss.item()
             optimizer.step()
-            scheduler.step()
+        scheduler.step()
 
 
                 
@@ -91,7 +104,12 @@ def train_model(train_loader, model, optimizer, criterion, scheduler, epochs, th
     return model
 
 
-def extract_features(model, data_loader, device='cuda:3'):
+
+
+
+
+
+def extract_features(model, data_loader, device='cuda:2'):
     model.eval()
     extracted_features = []
     labels = []
@@ -109,6 +127,11 @@ def extract_features(model, data_loader, device='cuda:3'):
     extracted_features = np.array(extracted_features)
     labels = np.array(labels)
     return extracted_features, labels
+
+
+
+
+
 
 
 def balance_data(features, labels, num_classes=2):
@@ -132,26 +155,10 @@ def balance_data(features, labels, num_classes=2):
 
     return balanced_features, balanced_labels
 
-
-# def train_logistic_regression(train_features, train_labels, test_features, test_labels):
-#     logistic_regression = LogisticRegression(C=1, max_iter=100)
-    
-#     logistic_regression.fit(train_features, train_labels)
-
-#     y_pred = logistic_regression.predict(test_features)
-    
-#     print(classification_report(test_labels, y_pred, zero_division=0))
-    
-#     print(f"Validation Accuracy: {accuracy_score(test_labels, y_pred)}")
-
-#     return logistic_regression
-
-
-
-def evaluate_on_test_set_with_shallow(test_loader, model, logistic_model, device='cuda:3'):
+def evaluate_on_test_set_with_shallow(test_loader, model, logistic_model, device='cuda:2'):
    
     test_features, test_labels = extract_features( model, test_loader, device)
-    test_features, test_labels = balance_data(test_features, test_labels)
+    #test_features, test_labels = balance_data(test_features, test_labels)
     
     y_test_pred = logistic_model.predict(test_features)
     
@@ -162,10 +169,13 @@ def evaluate_on_test_set_with_shallow(test_loader, model, logistic_model, device
 
 
     accuracy = accuracy_score(test_labels, y_test_pred)
+    # print(f"Test Accuracy: {accuracy}")
 
     f1_macro = f1_score(test_labels, y_test_pred, average='macro', zero_division=0)
+    # print(f"F1-score (Macro): {f1_macro}")
 
     f1_micro = f1_score(test_labels, y_test_pred, average='micro', zero_division=0)
+    # print(f"F1-score (Micro): {f1_micro}")
 
     return accuracy, f1_macro, f1_micro
 
@@ -174,8 +184,6 @@ def save_results_to_txt(file_path, accuracy, f1_macro, f1_micro):
         file.write(f"Test Accuracy: {accuracy}\n")
         file.write(f"F1 Macro: {f1_macro}\n")
         file.write(f"F1 Micro: {f1_micro}\n")
-
-
 
 
 def evaluate_on_test_set(test_loader, model, logistic_model, scaler, device):
@@ -193,11 +201,11 @@ def evaluate_on_test_set(test_loader, model, logistic_model, scaler, device):
     return accuracy
 
 
-def train_mlp(train_features, train_labels, test_features, test_labels, device='cuda:3'):
-    X_train = torch.tensor(train_features, dtype=torch.float32).to(device)
-    y_train = torch.tensor(train_labels, dtype=torch.float32).unsqueeze(1).to(device)
-    X_test = torch.tensor(test_features, dtype=torch.float32).to(device)
-    y_test = torch.tensor(test_labels, dtype=torch.float32).unsqueeze(1).to(device)
+def train_mlp(train_features, train_labels, test_features, test_labels, device='cuda:2'):
+    X_train = torch.tensor(train_features, dtype=torch.float32).unsqueeze(1).to(device)
+    y_train = torch.tensor(train_labels, dtype=torch.float32).to(device)
+    X_test = torch.tensor(test_features, dtype=torch.float32).unsqueeze(1).to(device)
+    y_test = torch.tensor(test_labels, dtype=torch.float32).to(device)
     
     mlp_model = MLPBinaryClassifier(input_size=train_features.shape[1]).to(device)
     criterion = nn.BCELoss()  
@@ -229,67 +237,36 @@ def train_mlp(train_features, train_labels, test_features, test_labels, device='
     return mlp_model
 
 
-# def evaluate_on_test_set_with_shallow(test_loader, model, mlp_model, device='cuda:3'):
- 
-#     test_features, test_labels = extract_features(model, test_loader, device)
-#     test_features, test_labels = balance_data(test_features, test_labels)
-    
 
-#     test_features = torch.tensor(test_features, dtype=torch.float32).to(device)
-#     test_labels = torch.tensor(test_labels, dtype=torch.float32).to(device)
-    
-
-#     mlp_model.eval()
-    
-#     with torch.no_grad():
-
-#         y_test_pred = mlp_model(test_features)
-#         y_test_pred = (y_test_pred > 0.5).float()  
-#         y_test_pred = y_test_pred.cpu().numpy()  
-    
-#     test_labels = test_labels.cpu().numpy()
-    
-#     print("Test Set Performance:")
-#     print(classification_report(test_labels, y_test_pred, zero_division=0))
-    
-#     accuracy = accuracy_score(test_labels, y_test_pred)
-#     print(f"Test Accuracy: {accuracy}")
-    
-#     f1_macro = f1_score(test_labels, y_test_pred, average='macro', zero_division=0)
-#     f1_micro = f1_score(test_labels, y_test_pred, average='micro', zero_division=0)
-
-#     return accuracy, f1_macro, f1_micro
-
-
-# def save_results_to_txt(file_path, accuracy, f1_macro, f1_micro):
-#     with open(file_path, 'w') as file:
-#         file.write(f"Test Accuracy: {accuracy}\n")
-#         file.write(f"F1 Macro: {f1_macro}\n")
-#         file.write(f"F1 Micro: {f1_micro}\n")
+def save_results_to_txt(file_path, accuracy, f1_macro, f1_micro, mlpt):
+    with open(file_path, 'w') as file:
+        file.write(f"Test Accuracy: {accuracy}\n")
+        file.write(f"F1 Macro: {f1_macro}\n")
+        file.write(f"F1 Micro: {f1_micro}\n")
+        file.write(f"Model: {mlpt}\n")
 
 
 
 
-
-
-
+CUDA_VISIBLE_DEVICES=2
 
 
 wandb.init(
     # set the wandb project where this run will be logged
-    project="SSLCONTRASTIVE2",
+    project="SSLCONTRASTIVE3",
 
     # track hyperparameters and run metadata
     config={
     "learning_rate": 0.0005,
-    "architecture": "SHallow",
+    "architecture": "SHallow-deepsupervision-mulconv",
     "dataset": "THU-seizure",
-    "epochs": 3000
+    "epochs":1500,
     }
 )
-# folder_to_clear = './data/train'
-# clear_directory(folder_to_clear)
-CUDA_VISIBLE_DEVICES=3
+
+
+
+
 #df = pd.read_parquet("/datasets2/epilepsy/TUSZ/processed/train/segments.parquet")
 output_dir = "./data/train"
 sampling_rate=250
@@ -301,40 +278,43 @@ clip_stride = 6
 ##all_clips_df = clips(df, sampling_rate, target_sampling_rate, output_dir, lowpass_freq,clip_length, clip_stride)
 #all_clips_df.to_parquet('./data/processed_train.parquet', engine='pyarrow')
 all_clips_df = pd.read_parquet('./data/processed_train.parquet')
-df = all_clips_df
-label_1_count = df[df['label'] == 1].shape[0]
-label_0_count = df[df['label'] == 0].shape[0]
-print(f"Label 1 count: {label_1_count}")
-print(f"Label 0 count: {label_0_count}")
 all_clips_df = remove_short_segments(all_clips_df, 6)
 all_clips_df = filter_shortpatient(all_clips_df, 2)
-all_clips_df['label'] = all_clips_df['label'].replace(3, 1)
-all_clips_df['label'] = all_clips_df['label'].replace(2, 1)
-all_clips_df['label'] = all_clips_df['label'].replace(4, 1)
 df = all_clips_df
+df['label'] = df['label'].replace(3, 1)
+df['label'] = df['label'].replace(2, 1)
+df['label'] = df['label'].replace(4, 1)
 label_1_count = df[df['label'] == 1].shape[0]
 label_0_count = df[df['label'] == 0].shape[0]
 print(f"Label 1 count: {label_1_count}")
 print(f"Label 0 count: {label_0_count}")
 #exit()
 
-device = 'cuda:3'
+device = 'cuda:2'
 #torch.cuda.empty_cache()
 emb_size = 64
-emb =FFT_GNN(1, 40)
+# emb = Shallow(1, 40)
+emb = FFT_GNN(1, 40)
+# model = ContrastiveNet_deep(emb, emb_size).to(device)
 model = ContrastiveNet(emb, emb_size).to(device)
-optimizer = Adam(model.parameters(), lr=0.0005, betas=(0.9, 0.999))
-scheduler = CosineAnnealingLR(optimizer, T_max=1000, eta_min=0.00001)
+optimizer = Adam(model.parameters(), lr=0.0005, betas=(0.9, 0.999), weight_decay=1e-4)
+scheduler = CosineAnnealingLR(optimizer, T_max=2000, eta_min=0.00001)
 criterion = RelativePositioningLoss(emb_size).to(device)
+# criterion = RelativePositioningLoss_deep(emb_size).to(device)
+#print(df.head())
 train_df, test_df = split_dataset(all_clips_df)
+train_df.to_parquet('./data/processed_trains.parquet', engine='pyarrow')
+test_df.to_parquet('./data/processed_tests.parquet', engine='pyarrow')
 session_count = train_df['session'].nunique()
-train_dataset = RPDataset(train_df, tau_pos=18, tau_neg=60)
+#print(f"Number of unique sessions: {session_count}")
+train_dataset = APN(train_df, tau_pos=18, tau_neg=60)
+#print(train_dataset[0])
 
-train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True,collate_fn=collate_fn, num_workers=8)
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True,collate_fn=collate_fn, num_workers=16)
 
 
 
-trained_model=train_model(train_loader, model, optimizer, criterion, scheduler, epochs=1000, threshold=0.01)
+trained_model=train_model(train_loader, model, optimizer, criterion,scheduler, epochs=2000, threshold=0.01)
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 result_folder = os.path.join("./result/RP/", timestamp)
 
@@ -346,7 +326,7 @@ torch.save(trained_model.state_dict(), model_save_path)
 train_df = balance_dataframe(train_df)
 print("success")
 train_dataset = taset(train_df)
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True,collate_fn=collate_fnt, num_workers=0)
+train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True,collate_fn=collate_fnt, num_workers=0)
 test_df = balance_dataframe(test_df)
 test_dataset = taset(test_df)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False,collate_fn = collate_fnt, num_workers=0)
@@ -359,31 +339,41 @@ test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False,collate_fn =
 train_features, train_labels = extract_features(trained_model, train_loader, device)
 test_features, test_labels = extract_features(trained_model, test_loader, device)
 
+
+
 logistic_model = train_logistic_regression(train_features,train_labels, test_features, test_labels)
-#mlp_model = train_mlp(train_features,train_labels, test_features, test_labels)
 
 
 os.makedirs(result_folder, exist_ok=True)
-# model_save_path = os.path.join(result_folder, f"mlp_RP.pt")
-# torch.save(mlp_model.state_dict(), model_save_path)
-
 model_path = os.path.join(result_folder, 'logistic.pkl')
 with open(model_path, 'wb') as f:
     pickle.dump(logistic_model, f)
 
 
 
+
+
+
+
 print("Evaluation result")
 all_clips_df = pd.read_parquet('./data/processed_test.parquet')
+all_clips_df = all_clips_df.groupby(level='session').filter(lambda x: (x['label'] != 0).any())
 all_clips_df = remove_short_segments(all_clips_df, 6)
 df = all_clips_df
+df['label'] = df['label'].replace(3, 1)
+df['label'] = df['label'].replace(2, 1)
+df['label'] = df['label'].replace(4, 1)
 df = balance_dataframe(df)
 test_dataset = taset(df)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=True,collate_fn=collate_fnt, num_workers=8)
 accuracy, f1_macro, f1_micro = evaluate_on_test_set_with_shallow(test_loader, trained_model, logistic_model)
 wandb.log({"accuracy": accuracy, "f1_macro": f1_macro, "f1_micro": f1_micro})
+
 result_file_path = os.path.join(result_folder, 'result.txt')
-save_results_to_txt(result_file_path, accuracy, f1_macro, f1_micro)
+save_results_to_txt(result_file_path, accuracy, f1_macro, f1_micro, "logistic")
+
+
+wandb.finish()
 
 
 
